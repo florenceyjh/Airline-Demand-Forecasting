@@ -1,0 +1,198 @@
+import pandas as pd
+import numpy as np
+import os
+
+os.chdir(file_path)
+
+
+# 1.1Simple additive method based on the day prior to 1--60
+
+def addmethod(frame, validation_data):
+    frame['history_data_add'] = (frame['max'] - frame['cum_bookings'])
+    new_frame = frame[['days', 'history_data_add']]
+    # gain a new frame between history data and validation data
+    new_data = validation_data.merge(new_frame, on='days')
+    new_data.loc[new_data['history_data_add'] == 0, 'history_data_add'] = np.nan
+    new_data['forcast_data'] = new_data['cum_bookings'] + new_data['history_data_add']
+    return new_data
+
+
+# 1.2 Simple mulplicative method based on the day prior to 1--60
+
+def mulplimethod(frame, validation_data):
+    # gain the history average data from prior 1 to 60 using Multiplicative method
+    frame['history_data_mul'] = frame['cum_bookings'] / frame['max']
+    new_frame_mul = frame[['days', 'history_data_mul']]
+    # gain a new frame between history data and validation data
+    new_data_mul = validation_data.merge(new_frame_mul, on='days')
+    # gain forcast data by mulplicative method
+    new_data_mul.loc[new_data_mul['history_data_mul'] == 1, 'history_data_mul'] = np.nan
+    new_data_mul['forcast_data'] = new_data_mul['cum_bookings'] / new_data_mul['history_data_mul']
+    return new_data_mul
+
+
+# 1.3 Multiplicative and Additive combined method based on the day prior to 1--60
+
+def comp_method(frame, validation_data, n):
+    frame_mul = mulplimethod(frame, validation_data)
+    frame_add = addmethod(frame, validation_data)
+    new_data_comp = frame_mul.merge(frame_add, on=['departure_date', 'booking_date', 'cum_bookings', 'final_demand',
+                                                   'naive_forecast', 'days'])
+    # gain forcase data; if days <=n ,use additive method; otherwise use multiplicative method. Judging from observation
+
+    new_data_comp.loc[new_data_comp['days'] <= n, 'forcast_data'] = new_data_comp['cum_bookings'] + new_data_comp[
+        'history_data_add']
+    new_data_comp.loc[new_data_comp['days'] > n, 'forcast_data'] = new_data_comp['cum_bookings'] / new_data_comp[
+        'history_data_mul']
+    return new_data_comp
+
+
+# 2.1 Improved Additive method based on DOW and the days prior to 1 -- 60
+
+def add_dow_method(frame, validation_data):
+    frame['history_data_add'] = (frame['max'] - frame['cum_bookings'])
+    new_frame = frame[['days', 'weekday', 'history_data_add']]
+    new_dataframe = validation_data.merge(new_frame, on=['days', 'weekday'])
+    new_dataframe.loc[new_dataframe['history_data_add'] == 0, 'history_data_add'] = np.nan
+    new_dataframe['forcast_data'] = new_dataframe['cum_bookings'] + new_dataframe['history_data_add']
+    return new_dataframe
+
+
+# 2.2 improved mulplicative method based on DOW and the days prior to 1 -- 60
+
+def mul_dow_method(frame, validation_data):
+    # gain the history average data from prior 1 to 60 using Multiplicative method
+    frame['history_data_mul'] = frame['cum_bookings'] / frame['max']
+    new_frame_mul = frame[['days', 'weekday', 'history_data_mul']]
+    # gain a new frame between history data and validation data
+    new_data_mul = validation_data.merge(new_frame_mul, on=['days', 'weekday'])
+    # gain forcast data by mulplicative method
+    new_data_mul.loc[new_data_mul['history_data_mul'] == 1, 'history_data_mul'] = np.nan
+    new_data_mul['forcast_data'] = new_data_mul['cum_bookings'] / new_data_mul['history_data_mul']
+    return new_data_mul
+
+
+# 2.3 Multiplicative and Additive combined method based on DOW and the days prior to 1 -- 60
+
+def comp_dow_method(frame, validation_data, n):
+    frame_mul = mul_dow_method(frame, validation_data)
+    frame_add = add_dow_method(frame, validation_data)
+    new_data_comp = frame_mul.merge(frame_add, on=['departure_date', 'booking_date', 'cum_bookings', 'final_demand',
+                                                   'naive_forecast', 'days', 'weekday'])
+    # gain forcase data; if days <=n ,use additive method; otherwise use multiplicative method. Judging from observation
+    new_data_comp.loc[~new_data_comp['weekday'].isin(n), 'forcast_data'] = new_data_comp['cum_bookings'] + \
+                                                                           new_data_comp['history_data_add']
+    new_data_comp.loc[new_data_comp['weekday'].isin(n), 'forcast_data'] = new_data_comp['cum_bookings'] / new_data_comp[
+        'history_data_mul']
+    return new_data_comp
+
+
+# calculate MASE #
+
+def calculate_MASE(new_data):
+    new_data['forcast_error'] = abs(new_data['forcast_data'] - new_data['final_demand'])
+    new_data['naive_error'] = abs(new_data['naive_forecast'] - new_data['final_demand'])
+    new_data['compare'] = new_data['forcast_error'] - new_data['naive_error']
+    new_data.loc[new_data['compare'] < 0, 'compare'] = np.nan
+    new_data.to_csv('new_data.csv', sep=',', header=True, index=False)
+    mase = new_data['forcast_error'].sum() / new_data['naive_error'].sum()
+    return mase
+
+
+# save all the result in the dictionary,and return the smallest mase and the dataframe
+def airlineForecast(trainingDataFileName, validationDataFileName):
+    ## 1. tidy the original data ##
+
+    # read data
+    training_data = pd.read_csv('airline_booking_trainingData.csv', sep=',', header=0)
+    validation_data = pd.read_csv('airline_booking_validationData.csv', sep=',', header=0)
+
+    # convert departure_date and booking_date to datetime datatype in training data
+    # calculate the days between these two dates and convert into int datatype for
+    training_data['departure_date'] = pd.to_datetime(training_data['departure_date'])
+    training_data['booking_date'] = pd.to_datetime(training_data['booking_date'])
+    training_data['days'] = training_data['departure_date'] - training_data['booking_date']
+    training_data['days'] = training_data['days'].dt.days
+
+    # get weekday for training data
+    training_data['weekday'] = training_data['departure_date'].dt.dayofweek
+
+    # gain the cumalative data accoding to the day of the week DOW
+    dow_frame = training_data.groupby(['weekday', 'days']).mean().reset_index()
+    new_dow = dow_frame.groupby(['weekday'], as_index=False).max()[['weekday', 'cum_bookings']]
+    new_dow.rename(columns={new_dow.columns[1]: "max"}, inplace=True)
+    new_data = dow_frame.merge(new_dow, on='weekday')
+
+    # gain the cumulative data from prior 1 to 60 days and the final demand on departure date
+    frame = training_data.groupby('days').mean().reset_index()
+    frame['max'] = frame['cum_bookings'].max()
+
+    # convert departure_date and booking_date to datetime datatype, calculate the days between these two dates and convert into int
+    # for validation data
+    validation_data['departure_date'] = pd.to_datetime(validation_data['departure_date'])
+    validation_data['booking_date'] = pd.to_datetime(validation_data['booking_date'])
+    validation_data['days'] = validation_data['departure_date'] - validation_data['booking_date']
+    validation_data['days'] = validation_data['days'].dt.days
+    validation_data['weekday'] = validation_data['departure_date'].dt.dayofweek
+
+    ## 2.calculate MASE of each method and find out the lowest one ##
+
+    # initialize mase dictionary
+    mase = {}
+
+    # 1.1 gain forcast data and MASE by Simple Additive method
+    add_data = addmethod(frame, validation_data)
+    mase_add = calculate_MASE(add_data)
+    add_data = add_data[['departure_date', 'booking_date', 'forcast_data']].sort_values(
+        by=['departure_date', 'booking_date']).reset_index(drop=True)
+    mase[mase_add] = ['Simple Additive method', add_data]
+    # add_data.to_csv("add_data.csv",header = True, sep=',',index = False)
+
+    # 1.2 gain forcast data and MASE by Simple Mulplicative method
+    mul_data = mulplimethod(frame, validation_data)
+    mase_mul = calculate_MASE(mul_data)
+    mul_data = mul_data[['departure_date', 'booking_date', 'forcast_data']].sort_values(
+        by=['departure_date', 'booking_date']).reset_index(drop=True)
+    mase[mase_mul] = ['Simple Multiplicative method', mul_data]
+    # mul_data.to_csv("mul_data .csv",header = True, sep=',',index = False)
+
+    # 1.3 gain forcast data and MASE by additive and mulplicative combined method
+    comp_data = comp_method(frame, validation_data, 7)
+    mase_comp = calculate_MASE(comp_data)
+    comp_data = comp_data[['departure_date', 'booking_date', 'forcast_data']].sort_values(
+        by=['departure_date', 'booking_date']).reset_index(drop=True)
+    mase[mase_comp] = ['Simple Combined method', comp_data]
+    # comp_data.to_csv("comp_data.csv",header = True, sep=',',index = False)
+
+    # 2.1 gain forcast data and MASE by Improved Additive method based on DOW
+    add_dow_data = add_dow_method(new_data, validation_data)
+    mase_add_dow = calculate_MASE(add_dow_data)
+    add_dow_data = add_dow_data[['departure_date', 'booking_date', 'forcast_data']].sort_values(
+        by=['departure_date', 'booking_date']).reset_index(drop=True)
+    mase[mase_add_dow] = ['Improved Advanced method(DOW)', add_dow_data]
+    # add_dow_data.to_csv('add_dow_data.csv',header = True,sep=',',index = False)
+
+    # gain forcast data and MASE by Improved multiplicative method based on DOW
+    mul_dow_data = mul_dow_method(new_data, validation_data)
+    mase_mul_dow = calculate_MASE(mul_dow_data)
+    mul_dow_data = mul_dow_data[['departure_date', 'booking_date', 'forcast_data']].sort_values(
+        by=['departure_date', 'booking_date']).reset_index(drop=True)
+    mase[mase_mul_dow] = ['Improved Multiplicative method(DOW)', mul_dow_data]
+    # mul_dow_data.to_csv('mul_dow_data.csv',header = True,sep=',',index = False)
+
+    # gain forcast data and MASE by Improved Multiplicative and Additive combined method based on DOW
+    comp_dow_data = comp_dow_method(new_data, validation_data, [5, 6, 4])
+    mase_comp_dow = calculate_MASE(comp_dow_data)
+    comp_dow_data = comp_dow_data[['departure_date', 'booking_date', 'forcast_data']].sort_values(
+        by=['departure_date', 'booking_date']).reset_index(drop=True)
+    mase[mase_comp_dow] = ['Improved Combined Method(DOW)', comp_dow_data]
+    # comp_dow_data.to_csv('comp_dow_data.csv',header = True,sep=',',index = False)
+
+    # output a list of result(including MASE, forecast dataframe)
+    min_key = min(mase.keys())
+    mase[min_key][1].to_csv('forcast.csv', sep=',', header=True, index=False)
+    return ('MASE: ' + str(min_key) + '\n' + 'Method\'s name: ' + str(
+        mase[min_key][0]) + '\n' + 'Forecast Data: ' + '\n' + str(mase[min_key][1]))
+
+
+print(airlineForecast('airline_booking_trainingData.csv', 'airline_booking_validationData.csv'))
